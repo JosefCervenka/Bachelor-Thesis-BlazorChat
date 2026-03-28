@@ -1,0 +1,75 @@
+﻿@using BlazorChatApp.Application.Services.InvitationServices
+@using BlazorChatApp.Application.Services.SignalRServices
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.SignalR.Client
+@inject ISnackbar Snackbar
+@inject ISignalRService ChatService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager Navigation
+@inject InvitationService InvitationService
+@implements IDisposable
+
+
+@if (InvitationNumber > 0)
+{
+    <MudTooltip Text="Invitations">
+        <MudBadge Content="@InvitationNumber" Color="Color.Secondary" Overlap="true" Class="mx-6 my-4" BadgeClass="badge">
+            <MudIconButton Icon="@Icons.Material.Filled.Email"
+                           Color="Color.Default"
+                           @onclick="OpenInvitations"
+                           Style="cursor: pointer;" />
+        </MudBadge>
+    </MudTooltip>
+}
+else
+{
+    <MudTooltip Text="Invitations">
+        <MudIconButton Icon="@Icons.Material.Filled.Email"
+                       Color="Color.Default"
+                       Class="mx-6 my-4"
+                       @onclick="OpenInvitations"
+                       Style="cursor: pointer;" />
+    </MudTooltip>
+}
+
+
+
+@code {
+    private int InvitationNumber { get; set; } = 0;
+
+    private HubConnection? hubConnection;
+
+    Action _observerMethod;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _observerMethod = async () =>
+        {
+            await InvokeAsync(async () =>
+            {
+                InvitationNumber = (await InvitationService.GetChatRequestsInvited()).Count;    
+                StateHasChanged();
+            }); 
+        };
+
+        await InvitationService.Initialization();
+        InvitationService.RegisterObserver(_observerMethod);
+        InvitationNumber = (await InvitationService.GetChatRequestsInvited()).Count;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+    }
+
+    private void OpenInvitations()
+    {
+        Navigation.NavigateTo("/invitations");
+    }
+
+    public void Dispose()
+    {
+        InvitationService.UnregisterObserver(_observerMethod);
+    }
+}

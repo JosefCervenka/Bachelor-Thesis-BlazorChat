@@ -1,0 +1,350 @@
+﻿@using BlazorChatApp.Application.DTOs.Users
+@using BlazorChatApp.Application.Services.InvitationServices
+@using BlazorChatApp.Application.Services.RenderModes
+@using BlazorChatApp.Application.Services.UserServices
+@using BlazorChatApp.Client.Components
+@using BlazorChatApp.Client.Components.Header
+@using BlazorChatApp.Client.Components.Menus
+@using Microsoft.AspNetCore.Components.Authorization
+@inherits LayoutComponentBase
+@inject NavigationManager NavigationManager;
+@inject InvitationService InvitationService;
+@inject IRenderModel renderModel;
+@inject IJSRuntime JSRuntime
+@inject HttpClient HttpClient
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject UserService UserService
+@implements IDisposable
+
+<MudThemeProvider Theme="@_theme" IsDarkMode="_isDarkMode" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+<MudLayout>
+    <MudAppBar Elevation="1">
+
+        <AuthorizeView>
+            <Authorized>
+                <MudTooltip Text="Menu">
+                    <MudIconButton Icon="@Icons.Material.Filled.Menu" 
+                                   Color="Color.Inherit" 
+                                   Edge="Edge.Start" 
+                                   OnClick="@((e) => DrawerToggleLeft())" />
+                </MudTooltip>
+            </Authorized>
+        </AuthorizeView>
+
+        <MudTooltip Text="Home">
+            <MudIconButton Icon="@Icons.Material.Filled.Home" 
+                           Color="Color.Inherit" 
+                           OnClick="@(() => NavigationManager.NavigateTo("/"))" />
+        </MudTooltip>
+
+        <MudHidden Breakpoint="Breakpoint.SmAndDown">
+            <MudText Typo="Typo.h5" Class="ml-3">Chat Application</MudText>
+        </MudHidden>
+
+        <MudHidden Breakpoint="Breakpoint.MdAndDown">
+            <MudText Class="ml-3" Typo="Typo.body1">
+                @renderModel.RenderType
+            </MudText>
+        </MudHidden>
+
+        <MudSpacer />
+        <AuthorizeView>
+            <Authorized>
+                <MudMenu>
+                    <ActivatorContent>
+                        <MudHidden Breakpoint="Breakpoint.SmAndDown">
+                            <MudButton Variant="Variant.Text" class="me-2" style="text-transform:none;">
+                                @if (currentUser?.ProfilePhoto != null && currentUser.ProfilePhoto.Length > 0)
+                                {
+                                    <MudAvatar Size="Size.Small" Class="me-2">
+                                        <MudImage Src="@($"data:image/png;base64,{Convert.ToBase64String(currentUser.ProfilePhoto)}")" />
+                                    </MudAvatar>
+                                }
+                                else
+                                {
+                                    <MudAvatar Size="Size.Small" Color="Color.Primary" Class="me-2">
+                                        @GetInitials()
+                                    </MudAvatar>
+                                }
+                                @GetDisplayName()
+                            </MudButton>
+                        </MudHidden>
+                        <MudHidden Breakpoint="Breakpoint.MdAndUp">
+                            @if (currentUser?.ProfilePhoto != null && currentUser.ProfilePhoto.Length > 0)
+                            {
+                                <MudAvatar Size="Size.Small">
+                                    <MudImage Src="@($"data:image/png;base64,{Convert.ToBase64String(currentUser.ProfilePhoto)}")" />
+                                </MudAvatar>
+                            }
+                            else
+                            {
+                                <MudAvatar Size="Size.Small" Color="Color.Primary">
+                                    @GetInitials()
+                                </MudAvatar>
+                            }
+                        </MudHidden>
+                    </ActivatorContent>
+
+                    <ChildContent>
+                        <MudMenuItem OnClick='() => NavigationManager.NavigateTo("/profile")'>
+                            <MudText Style="display:flex; align-items: center;"> <MudIcon Icon="@Icons.Material.Filled.AccountCircle" Class="me-2" /> Profile</MudText>
+                        </MudMenuItem>
+                        <MudMenuItem OnClick='() => NavigationManager.NavigateTo("/change-password")'>
+                            <MudText Style="display:flex; align-items: center;"> <MudIcon Icon="@Icons.Material.Filled.Lock" Class="me-2" /> Change Password</MudText>
+                        </MudMenuItem>
+                        <MudDivider />
+                        <MudMenuItem OnClick="() => Logout()">
+                            <MudText Style="display:flex; align-items: center;"> <MudIcon Icon="@Icons.Material.Filled.Logout" Class="me-2" /> Logout</MudText>
+                        </MudMenuItem>
+                    </ChildContent>
+                </MudMenu>
+
+                <InvitationBage />
+
+            </Authorized>
+            <NotAuthorized>
+                <MudTooltip Text="Login">
+                    <MudIconButton Icon="@Icons.Material.Filled.Login" 
+                                   Color="Color.Inherit" 
+                                   Edge="Edge.Start" 
+                                   OnClick='() => NavigationManager.NavigateTo("/login")' />
+                </MudTooltip>
+            </NotAuthorized>
+        </AuthorizeView>
+
+        <MudTooltip Text="@(_isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode")">
+            <MudIconButton Icon="@(DarkLightModeButtonIcon)" 
+                           Color="Color.Inherit" 
+                           OnClick="@DarkModeToggle" />
+        </MudTooltip>
+
+    </MudAppBar>
+
+    <AuthorizeView>
+        <Authorized>
+            <MudDrawer @bind-Open="_drawerOpenLeft" ClipMode="DrawerClipMode.Always" Anchor="@Anchor.Start" Elevation="2">
+                <SelectChatMenu />
+            </MudDrawer>
+        </Authorized>
+    </AuthorizeView>
+
+
+
+    <MudMainContent Class="pt-16 pa-4">
+        @Body
+    </MudMainContent>
+</MudLayout>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+@code {
+private bool _drawerOpenLeft = true;
+private bool _isDarkMode = true;
+private MudTheme? _theme = null;
+private UserDTO? currentUser;
+private string? currentUsername;
+private Action? _userProfileObserver;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await JSRuntime.InvokeVoidAsync("perf.markReady");
+        }
+    }
+
+
+
+protected override async Task OnInitializedAsync()
+{
+
+    _theme = new()
+    {
+        PaletteLight = _lightPalette,
+        PaletteDark = _darkPalette,
+        LayoutProperties = new LayoutProperties()
+    };
+
+    _userProfileObserver = async () =>
+    {
+        await InvokeAsync(async () =>
+        {
+            await LoadUserProfile();
+            StateHasChanged();
+        });
+    };
+
+    UserService.RegisterObserver(_userProfileObserver);
+    await LoadUserProfile();
+}
+
+private async Task LoadUserProfile()
+{
+    try
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        currentUsername = authState.User?.Identity?.Name;
+
+        if (!string.IsNullOrEmpty(currentUsername))
+        {
+            currentUser = await HttpClient.GetFromJsonAsync<UserDTO>("api/user/profile");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Failed to load user profile: {ex.Message}");
+    }
+}
+
+private string GetDisplayName()
+{
+    if (currentUser == null)
+        return currentUsername ?? "User";
+
+    if (!string.IsNullOrWhiteSpace(currentUser.FirstName) && !string.IsNullOrWhiteSpace(currentUser.Surname))
+        return $"{currentUser.FirstName} {currentUser.Surname}";
+
+    if (!string.IsNullOrWhiteSpace(currentUser.FirstName))
+        return currentUser.FirstName;
+
+    if (!string.IsNullOrWhiteSpace(currentUser.Surname))
+        return currentUser.Surname;
+
+    return currentUser.UserName ?? currentUsername ?? "User";
+}
+
+private string GetInitials()
+{
+    if (currentUser == null)
+        return currentUsername?.Length > 0 ? currentUsername[0].ToString().ToUpper() : "U";
+
+    if (!string.IsNullOrWhiteSpace(currentUser.FirstName) && !string.IsNullOrWhiteSpace(currentUser.Surname))
+        return $"{currentUser.FirstName[0]}{currentUser.Surname[0]}".ToUpper();
+
+    if (!string.IsNullOrWhiteSpace(currentUser.FirstName))
+        return currentUser.FirstName[0].ToString().ToUpper();
+
+    if (!string.IsNullOrWhiteSpace(currentUser.Surname))
+        return currentUser.Surname[0].ToString().ToUpper();
+
+    return currentUser.UserName?.Length > 0 ? currentUser.UserName[0].ToString().ToUpper() : "U";
+}
+
+    private async Task Logout()
+    {
+        try
+        {
+            string targetUrl = "/api/user/logout";
+
+            //Reason for using JSInterop:
+            //Blazor servermode cannot work with cookies from httpClient requests.
+
+            HttpResponseWrapper? httpResponseWrapper = null;
+
+            httpResponseWrapper = await JSRuntime.InvokeAsync<HttpResponseWrapper>("eval",
+            $$"""
+                (async function() {
+
+                    const response = await fetch('{{targetUrl}}', {
+                        method: 'POST'
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        return { Message: errorData.message, StatusCode: response.status };
+                    }
+
+                   return { Message: 'Logout successful', StatusCode: response.status };
+                })();
+            """
+            );
+
+            NavigationManager.NavigateTo("/login", forceLoad: true);
+
+            Console.WriteLine(httpResponseWrapper.Message);
+
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine("An unexpected error occurred. " + e.Message);
+        }
+    }
+
+    private void DrawerToggleLeft()
+    {
+        _drawerOpenLeft = !_drawerOpenLeft;
+    }
+
+    private void DarkModeToggle()
+    {
+        _isDarkMode = !_isDarkMode;
+    }
+
+    private readonly PaletteLight _lightPalette = new()
+    {
+        Black = "#110e2d",
+        AppbarText = "#424242",
+        AppbarBackground = "rgba(255,255,255,0.8)",
+        DrawerBackground = "#ffffff",
+        GrayLight = "#e8e8e8",
+        GrayLighter = "#f9f9f9",
+    };
+
+    private readonly PaletteDark _darkPalette = new()
+    {
+        Primary = "#7e6fff",
+        Surface = "#1e1e2d",
+        Background = "#1a1a27",
+        BackgroundGray = "#151521",
+        AppbarText = "#92929f",
+        AppbarBackground = "rgba(26,26,39,0.8)",
+        DrawerBackground = "#1a1a27",
+        ActionDefault = "#74718e",
+        ActionDisabled = "#9999994d",
+        ActionDisabledBackground = "#605f6d4d",
+        TextPrimary = "#b2b0bf",
+        TextSecondary = "#92929f",
+        TextDisabled = "#ffffff33",
+        DrawerIcon = "#92929f",
+        DrawerText = "#92929f",
+        GrayLight = "#2a2833",
+        GrayLighter = "#1e1e2d",
+        Info = "#4a86ff",
+        Success = "#3dcb6c",
+        Warning = "#ffb545",
+        Error = "#ff3f5f",
+        LinesDefault = "#33323e",
+        TableLines = "#33323e",
+        Divider = "#292838",
+        OverlayLight = "#1e1e2d80",
+    };
+
+    public string DarkLightModeButtonIcon => _isDarkMode switch
+    {
+        true => Icons.Material.Rounded.AutoMode,
+        false => Icons.Material.Outlined.DarkMode,
+    };
+
+    public void Dispose()
+    {
+        if (_userProfileObserver != null)
+        {
+            UserService.UnregisterObserver(_userProfileObserver);
+        }
+    }
+
+    private class HttpResponseWrapper
+    {
+        public string? Message { get; set; }
+        public int StatusCode { get; set; }
+    }
+}
+
+

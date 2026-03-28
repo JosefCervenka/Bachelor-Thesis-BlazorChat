@@ -1,0 +1,197 @@
+﻿@using BlazorChatApp.Application.DTOs.ChatRooms
+@using BlazorChatApp.Application.DTOs.Users
+@using BlazorChatApp.Application.Services.ChatServices
+@using BlazorChatApp.Application.Services.SignalRServices
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.SignalR.Client
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager Navigation
+@inject ChatRoomService ChatService
+@implements IDisposable
+
+<MudPaper Class="pa-2 mb-2" Elevation="0">
+    <div class="d-flex justify-space-between align-center">
+        <MudText Typo="Typo.h6" Class="ml-2">Chats</MudText>
+        <div>
+            <MudTooltip Text="Create Group Chat">
+                <MudIconButton Icon="@Icons.Material.Filled.GroupAdd" 
+                               Color="Color.Primary" 
+                               Size="Size.Small"
+                               OnClick="CreateGroupChat" />
+            </MudTooltip>
+            <MudTooltip Text="Start Direct Chat">
+                <MudIconButton Icon="@Icons.Material.Filled.PersonAdd" 
+                               Color="Color.Primary" 
+                               Size="Size.Small"
+                               OnClick="CreateDirectChat" />
+            </MudTooltip>
+        </div>
+    </div>
+</MudPaper>
+
+<MudNavMenu>
+    @foreach (var chatRoom in ChatRooms)
+    {
+        @if (chatRoom is DirectChatRoomDTO directChatRoom)
+        {
+            var otherMember = directChatRoom.ChatMembers.FirstOrDefault(x => x.User.UserName != CurrentUser);
+            var unreadCount = UnreadMessagesCount.TryGetValue(directChatRoom.Id, out var notification) ? notification.Count : 0;
+            var badgeContent = unreadCount > 99 ? "99+" : unreadCount.ToString();
+            var displayName = GetDisplayName(otherMember?.User);
+
+            <MudNavLink Href='@($"chatroom/{directChatRoom.Id}")' Match="NavLinkMatch.All">
+                <div class="d-flex align-center">
+                    @if (otherMember?.User?.ProfilePhoto != null && otherMember.User.ProfilePhoto.Length > 0)
+                    {
+                        <MudAvatar Size="Size.Small" Class="me-2">
+                            <MudImage Src="@($"data:image/png;base64,{Convert.ToBase64String(otherMember.User.ProfilePhoto)}")" />
+                        </MudAvatar>
+                    }
+                    else
+                    {
+                        <MudAvatar Size="Size.Small" Color="Color.Primary" Class="me-2">
+                            @GetInitials(otherMember?.User)
+                        </MudAvatar>
+                    }
+                    <span class="flex-grow-1;" style="flex: 1">
+                        @displayName
+                    </span>
+                    <span class="mr-2">
+                        @if (unreadCount > 0)
+                        {
+                            <MudBadge Content="@badgeContent" Color="Color.Error" Overlap="false" Class="ml-2">
+                            </MudBadge>
+                        }
+                    </span>
+                </div>
+            </MudNavLink>
+        }
+        else if (chatRoom is GroupChatRoomDTO groupChatRoom)
+        {
+            var unreadCount = UnreadMessagesCount.TryGetValue(groupChatRoom.Id, out var notification) ? notification.Count : 0;
+            var badgeContent = unreadCount > 99 ? "99+" : unreadCount.ToString();
+
+            <MudNavLink Href='@($"group-chatroom/{groupChatRoom.Id}")' Match="NavLinkMatch.All">
+                <div class="d-flex align-center">
+                    @if (groupChatRoom?.ProfilePicture != null)
+                    {
+                         <MudAvatar Size="Size.Small" Class="me-2">
+                            <MudImage Src="@($"data:image/png;base64,{Convert.ToBase64String(groupChatRoom.ProfilePicture)}")" />
+                        </MudAvatar> 
+                    }
+                    else
+                    {
+                        <MudAvatar Size="Size.Small" Color="Color.Primary" Class="me-2">
+                            @(groupChatRoom.Name?[0] ?? '?')
+                        </MudAvatar>
+                    }
+                    <span class="flex-grow-1;" style="flex: 1">
+                        @groupChatRoom.Name
+                    </span>
+                    <span class="mr-2">
+                        @if (unreadCount > 0)
+                        {
+                            <MudBadge Content="@badgeContent" Color="Color.Error" Overlap="false" Class="ml-2">
+                            </MudBadge>
+                        }
+                    </span>
+                </div>
+            </MudNavLink>
+        }
+    }
+</MudNavMenu>
+
+@code {
+    private HubConnection? hubConnection;
+
+    Action _observerMethod;
+
+    List<ChatRoomDTO> ChatRooms { get; set; } = [];
+
+    Dictionary<Guid, (int Count, DateTime TimeStamp)> UnreadMessagesCount { get; set; } = [];
+
+    string CurrentUser { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _observerMethod = async () =>
+        {
+            ChatRooms = await ChatService.GetChatRooms();
+            UnreadMessagesCount = await ChatService.GetUnreadMessagesCount();
+
+            await InvokeAsync(() =>
+            {
+                StateHasChanged();
+            });
+        };
+
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        CurrentUser = authState.User.Identity?.Name;
+
+        await ChatService.Initialization();
+        ChatService.RegisterObserver(_observerMethod);
+        ChatRooms = await ChatService.GetChatRooms();
+        UnreadMessagesCount = await ChatService.GetUnreadMessagesCount();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+    }
+
+    private void OpenInvitations()
+    {
+        Navigation.NavigateTo("/invitations");
+    }
+
+    private void CreateGroupChat()
+    {
+        Navigation.NavigateTo("/chatroom/create");
+    }
+
+    private void CreateDirectChat()
+    {
+        Navigation.NavigateTo("/chatroom/create-direct");
+    }
+
+    private string GetDisplayName(UserDTO? user)
+    {
+        if (user == null)
+            return "Unknown";
+
+        if (!string.IsNullOrWhiteSpace(user.FirstName) && !string.IsNullOrWhiteSpace(user.Surname))
+            return $"{user.FirstName} {user.Surname}";
+
+        if (!string.IsNullOrWhiteSpace(user.FirstName))
+            return user.FirstName;
+
+        if (!string.IsNullOrWhiteSpace(user.Surname))
+            return user.Surname;
+
+        return user.UserName ?? "Unknown";
+    }
+
+    private string GetInitials(UserDTO? user)
+    {
+        if (user == null)
+            return "?";
+
+        if (!string.IsNullOrWhiteSpace(user.FirstName) && !string.IsNullOrWhiteSpace(user.Surname))
+            return $"{user.FirstName[0]}{user.Surname[0]}".ToUpper();
+
+        if (!string.IsNullOrWhiteSpace(user.FirstName))
+            return user.FirstName[0].ToString().ToUpper();
+
+        if (!string.IsNullOrWhiteSpace(user.Surname))
+            return user.Surname[0].ToString().ToUpper();
+
+        return user.UserName?.Length > 0 ? user.UserName[0].ToString().ToUpper() : "?";
+    }
+
+    public void Dispose()
+    {
+        ChatService.UnregisterObserver(_observerMethod);
+    }
+}

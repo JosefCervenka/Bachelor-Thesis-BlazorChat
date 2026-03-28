@@ -1,0 +1,160 @@
+﻿@page "/invitations"
+@using BlazorChatApp.Application.DTOs.ChatRequests
+@using BlazorChatApp.Application.DTOs.Users
+@using BlazorChatApp.Application.Services.InvitationServices
+@using BlazorChatApp.Domain.Models.ChatRequests
+@using Microsoft.AspNetCore.Authorization
+@inject InvitationService InvitationService
+@inject ISnackbar Snackbar
+@inject HttpClient HttpClient
+@implements IDisposable
+
+<PageTitle>Requests</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Medium" Class="mt-6">
+    <MudText Typo="Typo.h5" Class="mb-4">Invitation Requests</MudText>
+
+    <MudText Typo="Typo.subtitle1" Class="mt-4">
+        Pending invitations
+    </MudText>
+
+    @if (InvitedRequests.Count == 0)
+    {
+        <MudPaper Class="pa-4 mb-3 mt-2" Elevation="1">
+            <MudText Typo="Typo.body2" Color="Color.Secondary">No pending invitations.</MudText>
+        </MudPaper>
+    }
+
+    @foreach (var request in InvitedRequests)
+    {
+        @if (request is FriendRequestDTO friendRequest)
+        {
+            <MudPaper Class="pa-4 mb-3 d-flex align-center" Elevation="3">
+                <div class="flex-1">
+                    <MudText Typo="Typo.subtitle1">@request.Initializer.UserName</MudText>
+                    <MudText Typo="Typo.body2" Class="mb-2">@((ChatRequestStatusEnum)@friendRequest.ChatRequestStatus.Id): @friendRequest.CreatedAt.ToString("dd.MM.yyyy hh:mm")</MudText>
+                </div>
+                <div>
+                    <MudIconButton Icon="@Icons.Material.Filled.Check"
+                                   Color="Color.Primary"
+                                   OnClick="@(() => AcceptRequest(friendRequest))"
+                                   AriaLabel="Accept" />
+
+                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                   Color="Color.Secondary"
+                                   OnClick="@(() => DeclineRequest(friendRequest))"
+                                   AriaLabel="Decline"
+                                   Class="ml-2" />
+                </div>
+            </MudPaper>
+        }
+        @if (request is GroupChatRequestDTO groupChatRequest)
+        {
+            <MudPaper Class="pa-4 mb-3 d-flex align-center" Elevation="3">
+                <div class="flex-1">
+                    <MudText Typo="Typo.subtitle1">@groupChatRequest?.Initializer?.UserName - @groupChatRequest?.GroupChatRoom?.Name</MudText>
+                    <MudText Typo="Typo.body2" Class="mb-2">@((ChatRequestStatusEnum)@groupChatRequest.ChatRequestStatus.Id): @groupChatRequest.CreatedAt.ToString("dd.MM.yyyy hh:mm")</MudText>
+                </div>
+                <div>
+                    <MudIconButton Icon="@Icons.Material.Filled.Check"
+                                   Color="Color.Primary"
+                                   OnClick="@(() => AcceptRequest(groupChatRequest))"
+                                   AriaLabel="Accept" />
+
+                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                   Color="Color.Secondary"
+                                   OnClick="@(() => DeclineRequest(groupChatRequest))"
+                                   AriaLabel="Decline"
+                                   Class="ml-2" />
+                </div>
+            </MudPaper>
+        }
+    }
+
+    <MudDivider Class="pa-4 mt-4 d-flex align-center" />
+
+    <MudText Typo="Typo.subtitle1">
+        Your requests
+    </MudText>
+
+    @if (InitializedRequests.Where(x => x is FriendRequestDTO).ToList().Count == 0)
+    {
+        <MudPaper Class="pa-4 mb-3 mt-2" Elevation="1">
+            <MudText Typo="Typo.body2" Color="Color.Secondary">No pending requests.</MudText>
+        </MudPaper>
+    }
+
+    @foreach (var request in InitializedRequests)
+    {
+        @if (request is FriendRequestDTO friendRequest)
+        {
+            <MudPaper Class="pa-4 mb-3 d-flex align-center" Elevation="3">
+                <div class="flex-1">
+                    <MudText Typo="Typo.subtitle1"> @request.Invited.UserName</MudText>
+                    <MudText Typo="Typo.body2" Class="mb-2">@((ChatRequestStatusEnum)@request.ChatRequestStatus.Id): @request.CreatedAt.ToString("dd.MM.yyyy hh:mm")</MudText>
+                </div>
+                <div>
+                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                   Color="Color.Secondary"
+                                   OnClick="@(() => RemoveRequest(friendRequest))"
+                                   AriaLabel="Decline"
+                                   Class="ml-2" />
+                </div>
+            </MudPaper>
+        }
+    }
+</MudContainer>
+
+@code {
+    List<ChatRequestDTO> InvitedRequests { get; set; } = [];
+
+    List<ChatRequestDTO> InitializedRequests { get; set; } = [];
+
+    Action _observerMethod;
+
+    override protected async Task OnInitializedAsync()
+    {
+        await InvitationService.Initialization();
+
+        InvitedRequests = await InvitationService.GetChatRequestsInvited();
+        InitializedRequests = await InvitationService.GetChatRequestsInitialized();
+
+        _observerMethod = () =>
+        {
+            InvokeAsync(async () =>
+            {
+                InvitedRequests = await InvitationService.GetChatRequestsInvited();
+                InitializedRequests = await InvitationService.GetChatRequestsInitialized();
+                StateHasChanged();
+            });
+        };
+
+        InvitationService.RegisterObserver(_observerMethod);
+
+        await base.OnInitializedAsync();
+    }
+
+    private async Task RemoveRequest(ChatRequestDTO requestDTO)
+    {
+        await InvitationService.RemoveRequest(requestDTO);
+    }
+
+    private async Task AcceptRequest(ChatRequestDTO request)
+    {
+        request.ChatRequestStatusId = (int)ChatRequestStatusEnum.Accepted;
+
+        await InvitationService.ResponseRequest(request);
+    }
+
+    private async Task DeclineRequest(ChatRequestDTO request)
+    {
+        request.ChatRequestStatusId = (int)ChatRequestStatusEnum.Decline;
+
+        await InvitationService.ResponseRequest(request);
+    }
+
+    public void Dispose()
+    {
+        InvitationService.UnregisterObserver(_observerMethod);
+    }
+}

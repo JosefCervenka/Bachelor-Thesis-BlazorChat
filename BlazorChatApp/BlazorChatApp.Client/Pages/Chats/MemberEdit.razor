@@ -1,0 +1,332 @@
+﻿@page "/group-chatroom/{ChatRoomId:guid}/member-edit"
+@page "/group-chatroom/{ChatRoomId:guid}/members"
+
+@using BlazorChatApp.Application.DTOs.ChatMembers
+@using BlazorChatApp.Application.DTOs.ChatRequests
+@using BlazorChatApp.Application.DTOs.ChatRooms
+@using BlazorChatApp.Application.DTOs.Users
+@using BlazorChatApp.Application.Services.ChatServices
+@using BlazorChatApp.Application.Services.InvitationServices
+@using BlazorChatApp.Client.Components.Utils
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore.Metadata.Internal
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@inject IDialogService DialogService
+@inject HttpClient HttpClient
+@inject InvitationService InvitationService;
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager NavigationManager
+
+<PageTitle>Add members</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Medium" Class="mt-6">
+
+    @if (CurrentChatMember?.ChatMemberRoleId == (int)ChatMemberRoleEnum.Admin || CurrentChatMember?.ChatMemberRoleId == (int)ChatMemberRoleEnum.Owner)
+    {
+        <MudPaper Class="pa-4 mt-4 d-flex align-center" Elevation="3">
+            <MudAutocomplete T="string"
+            Class="flex-1 me-4"
+            Label="Enter a username to send a group chat request."
+            @bind-Value="GroupMemberName"
+            SearchFunc="@Search"
+            ResetValueOnEmptyText="true"
+            CoerceText="true"
+            CoerceValue="true"
+            SelectValueOnTab="true" />
+
+            <MudButton Variant="Variant.Filled" Color="Color.Default" OnClick="AddMembers">
+                Add to the group chat.
+            </MudButton>
+        </MudPaper>
+
+        @if (InvitedPeoples.Count != 0)
+        {
+            <br />
+            <MudPaper Class="pa-4" Elevation="3">
+                <MudText Typo="Typo.h6" Class="mb-2">
+                    Invitations
+                </MudText>
+                <MudList T="string" Class="flex-1 me-4">
+                    @foreach (var user in InvitedPeoples)
+                    {
+                        <MudListItem Class="flex-1 me-4" >
+                            <div class="d-flex">
+                                <MudAvatar Size="Size.Small" Color="Color.Primary" Class="me-2">
+                                    @(user.UserName[0])
+                                </MudAvatar>
+                                <MudText>@user.UserName</MudText>
+                                <MudText HtmlTag="span" Class="ml-auto"><MudIcon Color=@Color.Error Icon="@Icons.Material.Filled.Delete" @onclick="() => RemoveInvitation(user)"></MudIcon></MudText>
+                            </div>
+                        </MudListItem>
+                    }
+                </MudList>
+            </MudPaper>
+
+            <div class="d-flex gap-2 mt-4">
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="Cancel">
+                    Cancel
+                </MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Commit">
+                    Add
+                </MudButton>
+            </div>
+        }
+    }
+    <br />
+
+    <MudPaper Class="pa-4" Elevation="3">
+        <MudText Typo="Typo.h6" Class="mb-2">
+            Chat members
+        </MudText>
+
+        <MudList T="ChatMemberDTO" Dense="true">
+            @foreach (var chatMember in chatMemberDTOs)
+            {
+                <MudListItem T="ChatMemberDTO">
+                    <div class="d-flex align-center">
+                        <MudAvatar Size="Size.Small" Color="Color.Primary" Class="me-2">
+                            @(chatMember.User.UserName[0])
+                        </MudAvatar>
+                        <MudText>@chatMember.User.UserName <MudText Inline="true" Color="Color.Secondary"> (@((chatMember as GroupChatMemberDTO)!.ChatMemberRole.Name)) </MudText> </MudText>
+
+                        @if ((CurrentChatMember?.ChatMemberRoleId == (int)ChatMemberRoleEnum.Admin || CurrentChatMember?.ChatMemberRoleId == (int)ChatMemberRoleEnum.Owner)
+                             && (chatMember as GroupChatMemberDTO)!.ChatMemberRoleId != (int)ChatMemberRoleEnum.Owner)
+                        {
+                            <MudMenu Icon="@Icons.Material.Filled.MoreVert" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Class="ml-auto">
+                                @if (CurrentChatMember?.ChatMemberRoleId == (int)ChatMemberRoleEnum.Owner && (chatMember as GroupChatMemberDTO)!.ChatMemberRoleId != (int)ChatMemberRoleEnum.Owner)
+                                {
+                                    @if ((chatMember as GroupChatMemberDTO)!.ChatMemberRoleId == (int)ChatMemberRoleEnum.User)
+                                    {
+                                        <MudMenuItem Icon="@Icons.Material.Filled.AdminPanelSettings" OnClick="() => ChangeRoleToAdmin(chatMember)">
+                                            Promote to Admin
+                                        </MudMenuItem>
+                                    }
+                                    else if ((chatMember as GroupChatMemberDTO)!.ChatMemberRoleId == (int)ChatMemberRoleEnum.Admin)
+                                    {
+                                        <MudMenuItem Icon="@Icons.Material.Filled.Person" OnClick="() => ChangeRoleToMember(chatMember)">
+                                            Demote to User
+                                        </MudMenuItem>
+                                    }
+                                }
+
+                                @if ((chatMember as GroupChatMemberDTO)!.ChatMemberRoleId != (int)ChatMemberRoleEnum.Owner)
+                                {
+                                    <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="() => DeleteUserAsync(chatMember)">
+                                        Remove from chat
+                                    </MudMenuItem>
+                                }
+                            </MudMenu>
+                        }
+                    </div>
+                </MudListItem>
+            }
+        </MudList>
+    </MudPaper>
+
+    <div class="d-flex justify-end mt-4">
+        <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="Cancel">
+            Back to Chat
+        </MudButton>
+    </div>
+
+</MudContainer>
+
+
+@code {
+
+
+    public ChatMemberDTO[] chatMemberDTOs = [];
+
+    public List<UserDTO> InvitedPeoples = [];
+
+    public string GroupMemberName { get; set; } = string.Empty;
+
+    public GroupChatMemberDTO CurrentChatMember { get; set; }
+
+    [Parameter]
+    public Guid ChatRoomId { get; set; }
+
+
+    public async Task RemoveMember(ChatMemberDTO member)
+    {
+        chatMemberDTOs = chatMemberDTOs.Where(m => m.UserId != member.UserId).ToArray();
+        HttpClient.DeleteAsync($"/api/chatroom/{ChatRoomId}/remove-member/{member.Id}");
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var options = new JsonSerializerOptions
+        {
+            ReferenceHandler = ReferenceHandler.Preserve,
+            PropertyNameCaseInsensitive = true
+        };
+
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var currentUser = authState.User.Identity.Name;
+
+        chatMemberDTOs = await HttpClient.GetFromJsonAsync<ChatMemberDTO[]>($"/api/chatroom/members/{ChatRoomId}", options) ?? [];
+
+        CurrentChatMember = chatMemberDTOs!
+            .OfType<GroupChatMemberDTO>()!
+            .FirstOrDefault(x => x.User.UserName == currentUser);
+
+        if (CurrentChatMember is null)
+        {
+            NavigationManager.NavigateTo("/");
+        }
+    }
+
+    private Task DeleteUserAsync(ChatMemberDTO chatMemberDTO)
+    {
+        var parameters = new DialogParameters<DialogWindow>
+        {
+            { x => x.ContentText, $"Do you really want to remove {chatMemberDTO.User.UserName} from chat? This process cannot be undone." },
+            { x => x.ButtonText, "Delete" },
+            { x => x.Color, Color.Error },
+            { x => x.OnSubmit, EventCallback.Factory.Create(this, async () =>
+                {
+                    await RemoveMember(chatMemberDTO);
+                })
+            }
+        };
+
+        var options = new DialogOptions() { CloseButton = true, MaxWidth = MaxWidth.ExtraSmall };
+
+        return DialogService.ShowAsync<DialogWindow>("Delete", parameters, options);
+    }
+
+    public void RemoveInvitation(UserDTO User) => InvitedPeoples.Remove(User);
+
+    public async Task Commit()
+    {
+        try
+        {
+            var members = InvitedPeoples.Select(x => new ChatMemberDTO()
+            {
+                UserId = x.Id
+            }).ToList();
+
+            foreach (var member in members)
+            {
+                GroupChatRequestDTO chatRequest = new GroupChatRequestDTO()
+                {
+                    GroupChatRoomId = ChatRoomId,
+                    InvitedId = member.UserId
+                };
+
+                await InvitationService.SendRequest(chatRequest);
+            }
+
+            InvitedPeoples.Clear();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+        }
+    }
+
+    private void Cancel()
+    {
+        NavigationManager.NavigateTo($"/group-chatroom/{ChatRoomId}");
+    }
+
+    public async Task AddMembers()
+    {
+        try
+        {
+            var user = await HttpClient.GetFromJsonAsync<UserDTO>($"/api/user/{GroupMemberName}");
+
+            if (user == null || InvitedPeoples.Any(x => x.UserName == user!.UserName))
+                return;
+
+            GroupMemberName = string.Empty;
+
+            InvitedPeoples.Add(user!);
+
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+        }
+    }
+
+    private async Task<IEnumerable<string>> Search(string value, CancellationToken token)
+    {
+
+        if (string.IsNullOrEmpty(value))
+            return [];
+
+        var users = await HttpClient.GetFromJsonAsync<UserDTO[]>($"/api/user/search?like={value}");
+
+        return users!.Select(x => x.UserName).ToArray();
+    }
+
+    private async Task ChangeRoleToAdmin(ChatMemberDTO chatMember)
+    {
+        try
+        {
+            var roleDto = new ChatMemberRoleDTO { Id = (int)ChatMemberRoleEnum.Admin };
+            var response = await HttpClient.PostAsJsonAsync($"/api/chatroom/{ChatRoomId}/change-member-role/{chatMember.Id}", roleDto);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var options = new JsonSerializerOptions
+                {
+                    ReferenceHandler = ReferenceHandler.Preserve,
+                    PropertyNameCaseInsensitive = true
+                };
+
+                var updatedMember = await response.Content.ReadFromJsonAsync<GroupChatMemberDTO>(options);
+
+                if (updatedMember != null)
+                {
+                    var index = Array.FindIndex(chatMemberDTOs, m => m.Id == chatMember.Id);
+                    if (index >= 0)
+                    {
+                        chatMemberDTOs[index] = updatedMember;
+                        StateHasChanged();
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error changing role: {ex.Message}");
+        }
+    }
+
+    private async Task ChangeRoleToMember(ChatMemberDTO chatMember)
+    {
+        try
+        {
+            var roleDto = new ChatMemberRoleDTO { Id = (int)ChatMemberRoleEnum.User };
+            var response = await HttpClient.PostAsJsonAsync($"/api/chatroom/{ChatRoomId}/change-member-role/{chatMember.Id}", roleDto);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var options = new JsonSerializerOptions
+                {
+                    ReferenceHandler = ReferenceHandler.Preserve,
+                    PropertyNameCaseInsensitive = true
+                };
+
+                var updatedMember = await response.Content.ReadFromJsonAsync<GroupChatMemberDTO>(options);
+
+                if (updatedMember != null)
+                {
+                    var index = Array.FindIndex(chatMemberDTOs, m => m.Id == chatMember.Id);
+                    if (index >= 0)
+                    {
+                        chatMemberDTOs[index] = updatedMember;
+                        StateHasChanged();
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error changing role: {ex.Message}");
+        }
+    }
+}

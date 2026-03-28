@@ -1,0 +1,341 @@
+﻿@page "/group-chatroom/{ChatRoomId:guid}/edit"
+@using BlazorChatApp.Application.DTOs.ChatRooms
+@using BlazorChatApp.Application.DTOs.ChatMembers
+@using System.Net.Http.Headers
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@inject HttpClient HttpClient
+@inject NavigationManager NavigationManager
+
+<MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+    <MudPaper Class="pa-6" Elevation="3">
+        <MudText Typo="Typo.h4" Align="Align.Center" GutterBottom="true">
+            Edit Group Chat
+        </MudText>
+
+        @if (isLoading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-4" />
+        }
+        else if (!hasPermission)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Filled">
+                <MudText Typo="Typo.h6">Access Denied</MudText>
+                <MudText>You don't have permission to edit this group chat. Only admins and owners can edit group settings.</MudText>
+                <MudButton Variant="Variant.Text" Color="Color.Inherit" Class="mt-2" OnClick="@(() => NavigationManager.NavigateTo($"/group-chatroom/{ChatRoomId}"))">
+                    Go Back to Chat
+                </MudButton>
+            </MudAlert>
+        }
+        else if (GroupChat != null)
+        {
+            <EditForm Model="@model" OnValidSubmit="() => SaveGroupChat()">
+                <DataAnnotationsValidator />
+
+                <MudGrid Class="mt-4">
+                    <MudItem xs="12" Class="d-flex flex-column align-center">
+                        @if (previewUrl != null)
+                        {
+                            <MudAvatar Size="Size.Large" Style="width: 150px; height: 150px;">
+                                <MudImage Src="@previewUrl" Alt="Group Photo" />
+                            </MudAvatar>
+                        }
+                        else if (GroupChat.ProfilePicture != null && GroupChat.ProfilePicture.Length > 0)
+                        {
+                            <MudAvatar Size="Size.Large" Style="width: 150px; height: 150px;">
+                                <MudImage Src="@($"data:image/png;base64,{Convert.ToBase64String(GroupChat.ProfilePicture)}")" Alt="Group Photo" />
+                            </MudAvatar>
+                        }
+                        else
+                        {
+                            <MudAvatar Color="Color.Primary" Size="Size.Large" Style="width: 150px; height: 150px;">
+                                @GroupChat.Name[0]
+                            </MudAvatar>
+                        }
+
+                        <MudFileUpload T="IBrowserFile"
+                                       FilesChanged="OnPhotoSelected"
+                                       Accept="image/*"
+                                       MaxFiles="1"
+                                       Class="mt-3">
+                            <ActivatorContent>
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.CloudUpload">
+                                    Upload Group Photo
+                                </MudButton>
+                            </ActivatorContent>
+                        </MudFileUpload>
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="model.Name"
+                                      Label="Group Name"
+                                      Variant="Variant.Outlined"
+                                      Required="true"
+                                      RequiredError="Group name is required"
+                                      HelperText="Enter the group chat name" />
+                        <ValidationMessage For="@(() => model.Name)" />
+                    </MudItem>
+
+                    @if (!string.IsNullOrEmpty(successMessage))
+                    {
+                        <MudItem xs="12">
+                            <MudAlert Severity="Severity.Success" Variant="Variant.Filled" CloseIcon="@Icons.Material.Filled.Close" CloseIconClicked="@(() => successMessage = null)">
+                                @successMessage
+                            </MudAlert>
+                        </MudItem>
+                    }
+
+                    @if (!string.IsNullOrEmpty(errorMessage))
+                    {
+                        <MudItem xs="12">
+                            <MudAlert Severity="Severity.Error" Variant="Variant.Filled" CloseIcon="@Icons.Material.Filled.Close" CloseIconClicked="@(() => errorMessage = null)">
+                                @errorMessage
+                            </MudAlert>
+                        </MudItem>
+                    }
+
+                    <MudItem xs="12" Class="d-flex justify-space-between">
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Secondary"
+                                   OnClick="Cancel">
+                            Cancel
+                        </MudButton>
+                        <MudButton ButtonType="ButtonType.Submit"
+                                   Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   Disabled="isSaving">
+                            @if (isSaving)
+                            {
+                                <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+                                <MudText Class="ms-2">Saving...</MudText>
+                            }
+                            else
+                            {
+                                <MudText>Save Changes</MudText>
+                            }
+                        </MudButton>
+                    </MudItem>
+                </MudGrid>
+            </EditForm>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Filled">
+                Failed to load group chat details.
+                <MudButton Variant="Variant.Text" Color="Color.Inherit" Class="mt-2" OnClick="@(() => NavigationManager.NavigateTo("/"))">
+                    Go to Home
+                </MudButton>
+            </MudAlert>
+        }
+    </MudPaper>
+</MudContainer>
+
+@code {
+    [Parameter]
+    public Guid ChatRoomId { get; set; }
+
+    private GroupChatRoomDTO? GroupChat { get; set; }
+    private GroupChatMemberDTO? userMembership;
+    private bool hasPermission = false;
+    private GroupChatModel model = new();
+    private IBrowserFile? selectedPhoto;
+    private string? previewUrl;
+    private bool isLoading = true;
+    private bool isSaving = false;
+    private string? successMessage;
+    private string? errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CheckPermissions();
+        
+        if (hasPermission)
+        {
+            await LoadGroupChat();
+        }
+        else
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task CheckPermissions()
+    {
+        try
+        {
+            var jsonOptions = new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                PropertyNamingPolicy = null,
+                ReferenceHandler = ReferenceHandler.Preserve
+            };
+
+            var response = await HttpClient.GetAsync($"api/chatroom/membership/{ChatRoomId}");
+            
+            if (response.IsSuccessStatusCode)
+            {
+                userMembership = await response.Content.ReadFromJsonAsync<GroupChatMemberDTO>(jsonOptions);
+                
+                if (userMembership != null)
+                {
+                    hasPermission = userMembership.ChatMemberRoleId == (int)ChatMemberRoleEnum.Admin ||
+                                    userMembership.ChatMemberRoleId == (int)ChatMemberRoleEnum.Owner;
+                }
+                
+                if (!hasPermission)
+                {
+                    NavigationManager.NavigateTo($"/group-chatroom/{ChatRoomId}");
+                }
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                hasPermission = false;
+                errorMessage = "You are not a member of this group.";
+                await Task.Delay(3000);
+                NavigationManager.NavigateTo("/");
+            }
+            else
+            {
+                hasPermission = false;
+                errorMessage = "Failed to verify permissions.";
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Permission check failed: {ex.Message}");
+            hasPermission = false;
+            errorMessage = "Failed to verify permissions.";
+        }
+    }
+
+    private async Task LoadGroupChat()
+    {
+        try
+        {
+            isLoading = true;
+            errorMessage = null;
+
+            var jsonOptions = new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                PropertyNamingPolicy = null,
+                ReferenceHandler = ReferenceHandler.Preserve
+            };
+
+            GroupChat = await HttpClient.GetFromJsonAsync<GroupChatRoomDTO>($"api/chatroom/{ChatRoomId}", jsonOptions);
+
+            if (GroupChat != null)
+            {
+                model.Name = GroupChat.Name;
+            }
+            else
+            {
+                errorMessage = "Group chat not found.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Failed to load group chat: " + ex.Message;
+            Console.WriteLine($"Load error: {ex}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task OnPhotoSelected(IBrowserFile file)
+    {
+        try
+        {
+            errorMessage = null;
+            selectedPhoto = file;
+
+            var resizedFile = await file.RequestImageFileAsync(file.ContentType, 300, 300);
+            using var stream = resizedFile.OpenReadStream(maxAllowedSize: 5_000_000);
+            var buffer = new byte[resizedFile.Size];
+            await stream.ReadAsync(buffer);
+            previewUrl = $"data:{resizedFile.ContentType};base64,{Convert.ToBase64String(buffer)}";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Failed to upload photo: " + ex.Message;
+        }
+    }
+
+    private async Task SaveGroupChat()
+    {
+        try
+        {
+            isSaving = true;
+            successMessage = null;
+            errorMessage = null;
+
+            if (string.IsNullOrWhiteSpace(model.Name))
+            {
+                errorMessage = "Group name is required.";
+                return;
+            }
+
+            var updateDto = new GroupChatRoomDTO
+            {
+                Id = ChatRoomId,
+                Name = model.Name
+            };
+
+            if (selectedPhoto != null)
+            {
+                using var memoryStream = new MemoryStream();
+                await selectedPhoto.OpenReadStream(maxAllowedSize: 5_000_000).CopyToAsync(memoryStream);
+                updateDto.ProfilePicture = memoryStream.ToArray();
+            }
+            else if (GroupChat?.ProfilePicture != null)
+            {
+                updateDto.ProfilePicture = GroupChat.ProfilePicture;
+            }
+
+            var response = await HttpClient.PutAsJsonAsync("api/chatroom", updateDto);
+
+            if (response.IsSuccessStatusCode)
+            {
+                successMessage = "Group chat updated successfully!";
+                selectedPhoto = null;
+                previewUrl = null;
+
+                await Task.Delay(1500);
+                NavigationManager.NavigateTo($"/group-chatroom/{ChatRoomId}");
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                errorMessage = "You don't have permission to edit this group.";
+            }
+            else
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                errorMessage = $"Failed to update group chat: {error}";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Failed to save group chat: " + ex.Message;
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private void Cancel()
+    {
+        NavigationManager.NavigateTo($"/group-chatroom/{ChatRoomId}");
+    }
+
+    private class GroupChatModel
+    {
+        public string Name { get; set; } = string.Empty;
+    }
+}
+

@@ -1,0 +1,96 @@
+﻿@page "/"
+@using BlazorChatApp.Application.Services.SignalRServices
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.SignalR.Client
+@using System.Runtime.InteropServices
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ISignalRService ChatService
+
+
+<PageTitle>Chat App</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Medium" Class="mt-6">
+    <MudPaper Class="pa-4 mud-height-full">
+        <AuthorizeView>
+            <Authorized>
+
+            </Authorized>
+            <NotAuthorized>
+                <MudText Typo="Typo.body1">Please log in or register to continue.</MudText>
+                <br />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="NavigateToLogin">Login</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="NavigateToRegister">Register</MudButton>
+            </NotAuthorized>
+        </AuthorizeView>
+
+        <div class="card mt-4" style="border: 2px solid @ModeColor">
+            <div class="card-header text-white" style="background-color: @ModeColor">
+                <h4>System Dashboard (@ModeLabel)</h4>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <tbody>
+                        <tr>
+                            <td><strong>Architecture:</strong></td>
+                            <td>@RuntimeInformation.OSArchitecture</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Operating system:</strong></td>
+                            <td>@RuntimeInformation.OSDescription</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Runtime version:</strong></td>
+                            <td>@RuntimeInformation.FrameworkDescription</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Threads:</strong></td>
+                            <td>@Environment.ProcessorCount</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Time:</strong></td>
+                            <td>@DateTime.Now.ToString("HH:mm:ss.fff")</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Enviroment:</strong></td>
+                            <td>@(isPrerender ? "Prerender" : isWasm ? "Browser" : "Server")</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </MudPaper>
+</MudContainer>
+@code {
+
+    private bool isWasm => OperatingSystem.IsBrowser();
+    private bool isPrerender => !RendererInfo.IsInteractive;
+    
+    private string ModeLabel => isPrerender ? "Prerender" : isWasm ? "WebAssembly" : "Server-Side";
+    private string ModeColor => isPrerender ? "#888888" : isWasm ? "#8A2BE2" : "#0078D4";
+
+
+
+
+    private System.Threading.Timer? timer;
+
+    protected override void OnInitialized()
+    {
+        timer = new System.Threading.Timer(_ =>
+        {
+            InvokeAsync(StateHasChanged);
+        }, null, 1000, 1000);
+    }
+
+    public void Dispose() => timer?.Dispose();
+
+    private void NavigateToLogin()
+    {
+        Navigation.NavigateTo("/login");
+    }
+
+    private void NavigateToRegister()
+    {
+        Navigation.NavigateTo("/register");
+    }
+}

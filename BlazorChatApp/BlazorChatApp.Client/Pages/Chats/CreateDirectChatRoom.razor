@@ -1,0 +1,108 @@
+﻿@page "/chatroom/create-direct"
+@using BlazorChatApp.Application.DTOs.ChatRequests
+@using BlazorChatApp.Application.DTOs.Users
+@using BlazorChatApp.Application.Services.InvitationServices
+@inject InvitationService InvitationService
+@inject ISnackbar Snackbar
+@inject HttpClient HttpClient
+
+<PageTitle>Send Friend Request</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Medium" Class="mt-6">
+    <MudText Typo="Typo.h5" Class="mb-4">Send Friend Request</MudText>
+
+    <MudPaper Class="pa-4 mt-4 d-flex align-center" Elevation="3">
+        <MudAutocomplete T="string"
+                         Class="flex-1 me-4"
+                         Label="Enter a username to send a chat request."
+                         @bind-Value="InputText"
+                         SearchFunc="@Search"
+                         ResetValueOnEmptyText="true"
+                         CoerceText="true"
+                         CoerceValue="true"
+                         SelectValueOnTab="true" />
+
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SendInvitation">
+            Send Invitation
+        </MudButton>
+    </MudPaper>
+
+    @if (!string.IsNullOrEmpty(StatusMessage))
+    {
+        <MudAlert Severity="@MessageSeverity" Class="mt-4">@StatusMessage</MudAlert>
+    }
+</MudContainer>
+
+@code {
+    string InputText { get; set; } = string.Empty;
+    string StatusMessage { get; set; } = string.Empty;
+    Severity MessageSeverity { get; set; } = Severity.Info;
+
+    private async Task<IEnumerable<string>> Search(string value, CancellationToken token)
+    {
+        if (string.IsNullOrEmpty(value))
+            return [];
+
+        try
+        {
+            var users = await HttpClient.GetFromJsonAsync<UserDTO[]>($"/api/user/search?like={value}");
+            return users?.Select(x => x.UserName).ToArray() ?? [];
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+            return [];
+        }
+    }
+
+    public async Task SendInvitation()
+    {
+        StatusMessage = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(InputText))
+        {
+            StatusMessage = "Please enter a username.";
+            MessageSeverity = Severity.Warning;
+            return;
+        }
+
+        try
+        {
+            var user = await HttpClient.GetFromJsonAsync<UserDTO>($"/api/user/{InputText}");
+
+            if (user == null)
+            {
+                StatusMessage = "User not found.";
+                MessageSeverity = Severity.Error;
+                return;
+            }
+
+            var (success, errorMessage) = await InvitationService.SendRequest(new FriendRequestDTO()
+            {
+                InvitedId = user.Id,
+            });
+
+            if (success)
+            {
+                StatusMessage = $"Friend request sent to {user.UserName} successfully!";
+                MessageSeverity = Severity.Success;
+            }
+            else
+            {
+                StatusMessage = errorMessage;
+                MessageSeverity = Severity.Error;
+            }
+
+            InputText = string.Empty;
+
+            Snackbar.Add(StatusMessage, MessageSeverity);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+            StatusMessage = "Failed to send invitation.";
+            MessageSeverity = Severity.Error;
+            Snackbar.Add(StatusMessage, Severity.Error);
+        }
+    }
+}

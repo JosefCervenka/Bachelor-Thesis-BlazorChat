@@ -1,0 +1,242 @@
+﻿@page "/profile"
+@using BlazorChatApp.Application.DTOs.Users
+@using BlazorChatApp.Application.Services.UserServices
+@using System.Net.Http.Headers
+@inject HttpClient HttpClient;
+@inject NavigationManager NavigationManager;
+@inject UserService UserService;
+
+<MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+    <MudPaper Class="pa-6" Elevation="3">
+        <MudText Typo="Typo.h4" Align="Align.Center" GutterBottom="true">
+            Edit Profile
+        </MudText>
+
+        @if (isLoading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-4" />
+        }
+        else if (User != null)
+        {
+            <EditForm Model="@User" OnValidSubmit="SaveProfile">
+                <DataAnnotationsValidator />
+
+                <MudGrid Class="mt-4">
+                    <!-- Profile Photo -->
+                    <MudItem xs="12" Class="d-flex flex-column align-center">
+                        @if (previewUrl != null)
+                        {
+                            <MudAvatar Size="Size.Large" Style="width: 150px; height: 150px;">
+                                <MudImage Src="@previewUrl" Alt="Profile Photo" />
+                            </MudAvatar>
+                        }
+                        else if (User.ProfilePhoto != null && User.ProfilePhoto.Length > 0)
+                        {
+                            <MudAvatar Size="Size.Large" Style="width: 150px; height: 150px;">
+                                <MudImage Src="@($"data:image/png;base64,{Convert.ToBase64String(User.ProfilePhoto)}")" Alt="Profile Photo" />
+                            </MudAvatar>
+                        }
+                        else
+                        {
+                            <MudAvatar Color="Color.Primary" Size="Size.Large" Style="width: 150px; height: 150px;">
+                                @GetInitials()
+                            </MudAvatar>
+                        }
+
+                        <MudFileUpload T="IBrowserFile"
+                                       FilesChanged="OnPhotoSelected"
+                                       Accept="image/*"
+                                       MaxFiles="1"
+                                       Class="mt-3">
+                            <ActivatorContent>
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.CloudUpload">
+                                    Upload Photo
+                                </MudButton>
+                            </ActivatorContent>
+                        </MudFileUpload>
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="User.FirstName"
+                                      Label="First Name"
+                                      Variant="Variant.Outlined"
+                                      HelperText="Enter your first name" />
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="User.Surname"
+                                      Label="Surname"
+                                      Variant="Variant.Outlined"
+                                      HelperText="Enter your surname" />
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="User.UserName"
+                                      Label="Username"
+                                      Variant="Variant.Outlined"
+                                      ReadOnly="true"
+                                      HelperText="Username cannot be changed" />
+                    </MudItem>
+
+                    @if (!string.IsNullOrEmpty(successMessage))
+                    {
+                        <MudItem xs="12">
+                            <MudAlert Severity="Severity.Success" Variant="Variant.Filled">
+                                @successMessage
+                            </MudAlert>
+                        </MudItem>
+                    }
+
+                    @if (!string.IsNullOrEmpty(errorMessage))
+                    {
+                        <MudItem xs="12">
+                            <MudAlert Severity="Severity.Error" Variant="Variant.Filled">
+                                @errorMessage
+                            </MudAlert>
+                        </MudItem>
+                    }
+
+                    <!-- Buttons -->
+                    <MudItem xs="12" Class="d-flex justify-space-between">
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Secondary"
+                                   OnClick="Cancel">
+                            Cancel
+                        </MudButton>
+                        <MudButton ButtonType="ButtonType.Submit"
+                                   Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   Disabled="isSaving">
+                            @if (isSaving)
+                            {
+                                <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+                                <MudText Class="ms-2">Saving...</MudText>
+                            }
+                            else
+                            {
+                                <MudText>Save Changes</MudText>
+                            }
+                        </MudButton>
+                    </MudItem>
+                </MudGrid>
+            </EditForm>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Filled">
+                Failed to load user profile.
+            </MudAlert>
+        }
+    </MudPaper>
+</MudContainer>
+
+@code {
+    UserDTO User { get; set; } = new UserDTO();
+    IBrowserFile? selectedPhoto;
+    string? previewUrl;
+    bool isLoading = true;
+    bool isSaving = false;
+    string? successMessage;
+    string? errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            User = await HttpClient.GetFromJsonAsync<UserDTO>("api/user/profile");
+            isLoading = false;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+        }
+    }
+
+    private async Task OnPhotoSelected(IBrowserFile file)
+    {
+        try
+        {
+            errorMessage = null;
+            selectedPhoto = file;
+
+            var resizedFile = await file.RequestImageFileAsync(file.ContentType, 300, 300);
+            using var stream = resizedFile.OpenReadStream(maxAllowedSize: 5_000_000);
+            var buffer = new byte[resizedFile.Size];
+            await stream.ReadAsync(buffer);
+            previewUrl = $"data:{resizedFile.ContentType};base64,{Convert.ToBase64String(buffer)}";
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+        }
+    }
+
+    private async Task SaveProfile()
+    {
+        try
+        {
+            isSaving = true;
+            successMessage = null;
+            errorMessage = null;
+
+            var content = new MultipartFormDataContent();
+            content.Add(new StringContent(User.FirstName ?? ""), "FirstName");
+            content.Add(new StringContent(User.Surname ?? ""), "Surname");
+            content.Add(new StringContent(User.UserName ?? ""), "UserName");
+
+            if (selectedPhoto != null)
+            {
+                var fileContent = new StreamContent(selectedPhoto.OpenReadStream(maxAllowedSize: 5_000_000));
+                fileContent.Headers.ContentType = new MediaTypeHeaderValue(selectedPhoto.ContentType);
+                content.Add(fileContent, "ProfilePhoto", selectedPhoto.Name);
+            }
+
+            var response = await HttpClient.PutAsync("api/user/profile", content);
+
+            if (response.IsSuccessStatusCode)
+            {
+                successMessage = "Profile updated successfully!";
+                selectedPhoto = null;
+                previewUrl = null;
+
+                await Task.Delay(500);
+                User = await HttpClient.GetFromJsonAsync<UserDTO>("api/user/profile");
+
+                await UserService.NotifyProfileUpdated();
+            }
+            else
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                errorMessage = $"Failed to update profile: {error}";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Failed to save profile: " + ex.Message;
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private void Cancel()
+    {
+        NavigationManager.NavigateTo("/");
+    }
+
+    private string GetInitials()
+    {
+        if (User == null) return "U";
+
+        var firstInitial = !string.IsNullOrEmpty(User.FirstName) ? User.FirstName[0].ToString().ToUpper() : "";
+        var lastInitial = !string.IsNullOrEmpty(User.Surname) ? User.Surname[0].ToString().ToUpper() : "";
+
+        if (string.IsNullOrEmpty(firstInitial) && string.IsNullOrEmpty(lastInitial))
+            return User.UserName?.Length > 0 ? User.UserName[0].ToString().ToUpper() : "U";
+
+        return firstInitial + lastInitial;
+    }
+}

@@ -1,0 +1,545 @@
+﻿@page "/chatroom/{ChatRoomId:guid}"
+@page "/group-chatroom/{ChatRoomId:guid}"
+
+@using BlazorChatApp.Application.DTOs.ChatMembers
+@using BlazorChatApp.Application.DTOs.ChatRooms
+@using BlazorChatApp.Application.DTOs.Messages
+@using BlazorChatApp.Application.DTOs.Users
+@using BlazorChatApp.Application.Services.ChatServices
+@using BlazorChatApp.Application.Services.SignalRServices
+@using BlazorChatApp.Client.Components.Utils
+@using Humanizer
+@using Humanizer.Localisation
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Globalization
+@inject ChatService ChatService;
+@inject ChatRoomService ChatRoomService;
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject HttpClient HttpClient;
+@inject NavigationManager Navigation;
+@inject IDialogService DialogService;
+@implements IDisposable
+@inject IJSRuntime JS;
+
+<MudPaper Class="pa-4" Elevation="1" Style="flex: 1; display: flex; flex-direction: column; margin-top: 15px; position: relative;">
+
+    @if (isChatLoaded)
+    {
+        <div style="position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 10;">
+            <MudPaper Elevation="2" Style="border-radius: 25px; height: 50px; display: flex; align-items: center; justify-content: center; padding: 20px 15px; gap: 10px;">
+                <MudText>@GetChatTitle()</MudText>
+                
+                <MudMenu Icon="@Icons.Material.Filled.MoreVert" 
+                         Color="Color.Primary" 
+                         Size="Size.Medium"
+                         AnchorOrigin="Origin.BottomCenter"
+                         TransformOrigin="Origin.TopCenter">
+                    @if (IsGroupChat && userMembership is GroupChatMemberDTO groupMember)
+                    {
+                        @if (groupMember.ChatMemberRoleId == (int)ChatMemberRoleEnum.Admin || 
+                             groupMember.ChatMemberRoleId == (int)ChatMemberRoleEnum.Owner)
+                        {
+                            <MudMenuItem Icon="@Icons.Material.Filled.Edit" 
+                                         OnClick="@(() => Navigation.NavigateTo($"/group-chatroom/{ChatRoomId}/edit"))">
+                                Edit chatroom
+                            </MudMenuItem>
+                            <MudMenuItem Icon="@Icons.Material.Filled.People" 
+                                         OnClick="@(() => Navigation.NavigateTo($"/group-chatroom/{ChatRoomId}/member-edit"))">
+                                Edit members
+                            </MudMenuItem>
+                        }
+                        else
+                        {
+                            <MudMenuItem Icon="@Icons.Material.Filled.People" 
+                                         OnClick="@(() => Navigation.NavigateTo($"/group-chatroom/{ChatRoomId}/members"))">
+                                Members
+                            </MudMenuItem>
+                        }
+
+                        @if (groupMember.ChatMemberRoleId == (int)ChatMemberRoleEnum.Owner)
+                        {
+                            <MudDivider />
+                            <MudMenuItem Icon="@Icons.Material.Filled.Delete" 
+                                         IconColor="Color.Error"
+                                         OnClick="DeleteChatWarning">
+                                Delete chat
+                            </MudMenuItem>
+                        }
+                        else
+                        {
+                            <MudDivider />
+                            <MudMenuItem Icon="@Icons.Material.Filled.ExitToApp" 
+                                         IconColor="Color.Error"
+                                         OnClick="LeaveChatWarning">
+                                Leave chat
+                            </MudMenuItem>
+                        }
+                    }
+                    else if (!IsGroupChat)
+                    {
+                        <MudMenuItem Icon="@Icons.Material.Filled.ExitToApp" 
+                                     IconColor="Color.Error"
+                                     OnClick="DeleteChatWarning">
+                            Leave chat
+                        </MudMenuItem>
+                    }
+                </MudMenu>
+            </MudPaper>
+        </div>
+    }
+
+    <div style="flex: 1; overflow-y: auto;" id="chat-view" @ref="messageContainer" @onscroll="OnScroll">
+
+        <div @key="@(ChatRoomId + "chatroom")">
+
+            @foreach (var chunk in MessageChunkSplitter(Messages, TimeSpan.FromMinutes(5)))
+            {
+                <MudChat ChatPosition="@(chunk.UserName == _userName ? ChatBubblePosition.End : ChatBubblePosition.Start)">
+                    <MudChatHeader Name="@chunk.UserName"
+                                   Time="@chunk.Time.Humanize(true, culture: CultureInfo.CurrentCulture)" />
+                    @foreach (var msg in chunk.Messages)
+                    {
+                        @if (msg is PhotoMessageDTO photoMsg)
+                        {
+                            <MudChatBubble Class="chat-bubble">
+                                @if (!string.IsNullOrEmpty(photoMsg.Content))
+                                {
+                                    <p>@photoMsg.Content</p>
+                                }
+                                <img src="data:image/png;base64,@Convert.ToBase64String(photoMsg.Photo)" style="max-width: 200px; max-height: 200px;" />
+                            </MudChatBubble>
+                        }
+                        else
+                        {
+                            <MudChatBubble Class="chat-bubble">
+                                @msg.Content
+                            </MudChatBubble>
+                        }
+                    }
+                </MudChat>
+            }
+
+        </div>
+    </div>
+
+    @if (previewUrl is not null)
+    {
+        <MudPaper Class="pa-2 mb-2" Elevation="2" Style="background: var(--mud-palette-background-grey); border-radius: 12px;">
+            <div class="d-flex align-center gap-2">
+                <MudPaper Class="d-flex align-center justify-center pa-2"
+                          Elevation="0"
+                          Style="border: 2px solid var(--mud-palette-primary); border-radius: 8px; width: 80px; height: 80px; overflow: hidden;">
+                    <img src="@previewUrl" style="max-width: 100%; max-height: 100%; object-fit: cover;" />
+                </MudPaper>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Image ready to send</MudText>
+                <MudSpacer />
+                <MudIconButton Icon="@Icons.Material.Filled.Close"
+                               Color="Color.Error"
+                               Size="Size.Small"
+                               OnClick="ClearImage"
+                               Title="Remove image" />
+            </div>
+        </MudPaper>
+    }
+
+    <MudPaper Class="pa-3 mt-2" Elevation="3" Style="border-radius: 24px; background: var(--mud-palette-surface);">
+        <div class="d-flex align-center gap-2">
+            <MudFileUpload T="IBrowserFile"
+                           FilesChanged="OnFilesChanged"
+                           Accept="image/*"
+                           MaxFiles="1">
+                <ActivatorContent>
+                    <MudTooltip Text="Attach image">
+                        <MudIconButton Icon="@Icons.Material.Filled.Image"
+                                       Color="Color.Primary"
+                                       Size="Size.Medium"
+                                       Variant="Variant.Filled"
+                                       Style="border-radius: 50%;" />
+                    </MudTooltip>
+                </ActivatorContent>
+            </MudFileUpload>
+
+            <MudTextField @bind-Value="TextValue"
+                          TextUpdateSuppression="false"
+                          Placeholder="Type a message..."
+                          Variant="Variant.Text"
+                          Class="flex-grow-1"
+                          Immediate="true"
+                          DisableUnderLine="true"
+                          Style="font-size: 1rem;"
+                          OnKeyUp="@(async e => { if (e.Key == "Enter" && !e.ShiftKey) await SendMessage(); })">
+            </MudTextField>
+
+            @if (!string.IsNullOrWhiteSpace(TextValue) || imageFile != null)
+            {
+                <MudTooltip Text="Send message">
+                    <MudIconButton Icon="@Icons.Material.Filled.Send"
+                                   Color="Color.Primary"
+                                   Size="Size.Medium"
+                                   Variant="Variant.Filled"
+                                   Style="border-radius: 50%;"
+                                   OnClick="SendMessage" />
+                </MudTooltip>
+            }
+            else
+            {
+                <MudIconButton Icon="@Icons.Material.Filled.Send"
+                               Color="Color.Secondary"
+                               Size="Size.Medium"
+                               Variant="Variant.Filled"
+                               Style="border-radius: 50%;"
+                               Disabled="true" />
+            }
+        </div>
+    </MudPaper>
+</MudPaper>
+
+<script @key="@(ChatRoomId + "scripts")">
+    window.getScrollTop = (e) => {
+        return e.scrollTop;
+    };
+
+    window.getScrollHeight = (e) => {
+        return e.scrollHeight;
+    };
+
+    window.setScrollTop = (e, value) => {
+        e.scrollTop = value;
+    };
+
+    window.scrollToBottom = (e) => {
+        e.scrollTop = e.scrollHeight;
+    };
+
+    window.checkIfHasChildren = (e) => {
+        return (e.children && e.children.length > 0);
+    };
+</script>
+
+@code {
+    IBrowserFile? imageFile;
+    string? previewUrl;
+
+    private ChatMemberDTO? userMembership;
+    private bool IsGroupChat => Navigation.Uri.Contains("/group-chatroom/");
+    private bool isChatLoaded = false;
+
+    async Task OnFilesChanged(IBrowserFile file)
+    {
+        var resizedFile = await file.RequestImageFileAsync(file.ContentType, 800, 800);
+        imageFile = resizedFile;
+
+        using var stream = resizedFile.OpenReadStream(maxAllowedSize: 100_000_000);
+        var buffer = new byte[resizedFile.Size];
+
+        int bytesRead = 0;
+        while (bytesRead < buffer.Length)
+        {
+            int read = await stream.ReadAsync(buffer, bytesRead, buffer.Length - bytesRead);
+            if (read == 0)
+            {
+                break;
+            }
+            bytesRead += read;
+        }
+
+        previewUrl = $"data:{resizedFile.ContentType};base64,{Convert.ToBase64String(buffer)}";
+    }
+
+    void ClearImage()
+    {
+        imageFile = null;
+        previewUrl = null;
+    }
+
+    private async Task LoadUserMembership()
+    {
+        try
+        {
+            var response = await HttpClient.GetAsync($"/api/chatroom/membership/{ChatRoomId}");
+            if (response.IsSuccessStatusCode)
+            {
+                userMembership = await response.Content.ReadFromJsonAsync<GroupChatMemberDTO>();
+            }
+            else
+            {
+                userMembership = null;
+            }
+        }
+        catch (Exception)
+        {
+            userMembership = null;
+        }
+    }
+
+    private Task LeaveChatWarning()
+    {
+        var parameters = new DialogParameters<DialogWindow>
+        {
+            { x => x.ContentText, $"Do you really want to leave this chat?" },
+            { x => x.ButtonText, "Leave" },
+            { x => x.Color, Color.Error },
+            { x => x.OnSubmit, EventCallback.Factory.Create(this, async () =>
+                {
+                    await LeaveChat();
+                })
+            }
+        };
+
+        var options = new DialogOptions() { CloseButton = true, MaxWidth = MaxWidth.ExtraSmall };
+
+        return DialogService.ShowAsync<DialogWindow>("Leave Chat", parameters, options);
+    }
+
+    private async Task LeaveChat()
+    {
+        if (userMembership != null)
+        {
+            var response = await HttpClient.DeleteAsync($"/api/chatroom/{ChatRoomId}/remove-member/{userMembership.Id}");
+            if (response.IsSuccessStatusCode)
+            {
+                Navigation.NavigateTo("/");
+            }
+        }
+    }
+
+    private Task DeleteChatWarning()
+    {
+        var parameters = new DialogParameters<DialogWindow>
+        {
+            { x => x.ContentText, $"Do you really want to delete this chat? This action cannot be undone and all messages will be permanently erased." },
+            { x => x.ButtonText, "Delete" },
+            { x => x.Color, Color.Error },
+            { x => x.OnSubmit, EventCallback.Factory.Create(this, async () =>
+                {
+                    await DeleteChat();
+                })
+            }
+        };
+
+        var options = new DialogOptions() { CloseButton = true, MaxWidth = MaxWidth.ExtraSmall };
+
+        return DialogService.ShowAsync<DialogWindow>("Delete Chat", parameters, options);
+    }
+
+    private async Task DeleteChat()
+    {
+        var response = await HttpClient.DeleteAsync($"/api/chatroom/{ChatRoomId}");
+        if (response.IsSuccessStatusCode)
+        {
+            Navigation.NavigateTo("/");
+        }
+    }
+
+    private string GetChatTitle()
+    {
+        return IsGroupChat ? "Group Chat" : "Direct Chat";
+    }
+
+    private ElementReference messageContainer;
+
+    public string TextValue { get; set; }
+
+    [Parameter]
+    public Guid ChatRoomId { get; set; }
+
+    private Action _observerMethod;
+
+    private List<MessageDTO> Messages { get; set; } = [];
+
+    private string _userName;
+
+    private bool isLoading = false;
+
+    private bool loadmore = true;
+
+    private bool _scrollPending = false;
+
+    private async Task OnScroll(EventArgs e)
+    {
+        if (!loadmore)
+            return;
+
+        try
+        {
+            var scrollTop = await JS.InvokeAsync<int>("getScrollTop", messageContainer);
+
+            if (!isLoading && scrollTop <= 100)
+            {
+                isLoading = true;
+
+                var oldHeight = await JS.InvokeAsync<int>("getScrollHeight", messageContainer);
+
+                loadmore = await ChatService.LoadAditionalMessages(ChatRoomId);
+                Messages = await ChatService.GetMessages(ChatRoomId);
+
+                await InvokeAsync(StateHasChanged);
+
+                var newHeight = await JS.InvokeAsync<int>("getScrollHeight", messageContainer);
+                var diff = newHeight - oldHeight;
+                await JS.InvokeVoidAsync("setScrollTop", messageContainer, diff);
+
+                isLoading = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        _userName = authState.User.Identity.Name;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        isChatLoaded = false;
+
+        if (_observerMethod is not null)
+        {
+            ChatService.UnregisterObserver(_observerMethod);
+        }
+
+        _observerMethod = async () =>
+        {
+            await InvokeAsync(async () =>
+            {
+                Messages = await ChatService.GetMessages(ChatRoomId);
+                await ChatRoomService.NotifyVisited(ChatRoomId);
+                _scrollPending = true;
+                StateHasChanged();
+            });
+        };
+
+        try
+        {
+            await ChatService.Inicilize(ChatRoomId);
+            ChatService.RegisterObserver(_observerMethod);
+            Messages = await ChatService.GetMessages(ChatRoomId);
+            await ChatRoomService.NotifyVisited(ChatRoomId);
+            
+            if (IsGroupChat)
+            {
+                await LoadUserMembership();
+            }
+            
+            isChatLoaded = true;
+            _scrollPending = true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading chat: {ex.Message}");
+            isChatLoaded = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        ChatService.UnregisterObserver(_observerMethod);
+    }
+
+    public async Task SendMessage()
+    {
+        if (string.IsNullOrEmpty(TextValue) && imageFile == null)
+        {
+            return;
+        }
+
+        if (imageFile is null)
+        {
+            MessageDTO message = new MessageDTO
+            {
+                Content = TextValue,
+                ChatRoomId = ChatRoomId,
+                ChatRoom = new ChatRoomDTO { Id = ChatRoomId }
+            };
+
+            await ChatService.SendMessage(message);
+        }
+        else
+        {
+            byte[] buffer = new byte[imageFile.Size];
+            using (var stream = imageFile.OpenReadStream(maxAllowedSize: 100_000_000))
+            {
+                int bytesRead = 0;
+                while (bytesRead < buffer.Length)
+                {
+                    int read = await stream.ReadAsync(buffer, bytesRead, buffer.Length - bytesRead);
+                    if (read == 0)
+                        break;
+                    bytesRead += read;
+                }
+            }
+
+            PhotoMessageDTO message = new PhotoMessageDTO
+            {
+                Content = TextValue,
+                ChatRoomId = ChatRoomId,
+                ChatRoom = new ChatRoomDTO { Id = ChatRoomId },
+                Photo = buffer
+            };
+
+            imageFile = null;
+            previewUrl = null;
+
+            await ChatService.SendMessage(message);
+        }
+
+        TextValue = string.Empty;
+    }
+
+    IEnumerable<MessageChunk> MessageChunkSplitter(List<MessageDTO> messages, TimeSpan gap)
+    {
+        MessageChunk currentGroup = null;
+
+        foreach (var message in messages.OrderBy(m => m.CreatedAt))
+        {
+            if (currentGroup == null || currentGroup.UserName != message.ChatMember.User.UserName || (message.CreatedAt - currentGroup.Time) > gap)
+            {
+                currentGroup = new MessageChunk
+                {
+                    UserName = message.ChatMember.User.UserName,
+                    Time = message.CreatedAt,
+                    Messages = new List<MessageDTO>()
+                };
+
+                yield return currentGroup;
+            }
+            currentGroup.Messages.Add(message);
+            currentGroup.Time = message.CreatedAt;
+        }
+    }
+
+    private async Task ScrollDown()
+    {
+        try
+        {
+            if (_scrollPending)
+            {
+                await Task.Delay(5);
+                await JS.InvokeVoidAsync("scrollToBottom", messageContainer);
+                _scrollPending = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        await ScrollDown();
+    }
+
+    class MessageChunk
+    {
+        public string UserName { get; set; }
+        public DateTime Time { get; set; }
+        public List<MessageDTO> Messages { get; set; }
+    }
+}

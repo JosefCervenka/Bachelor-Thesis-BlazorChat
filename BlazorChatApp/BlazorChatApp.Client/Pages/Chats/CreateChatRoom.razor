@@ -1,0 +1,124 @@
+﻿@page "/chatroom/create"
+@using BlazorChatApp.Application.DTOs.ChatMembers
+@using BlazorChatApp.Application.DTOs.ChatRooms
+@using BlazorChatApp.Application.DTOs.Users
+@using BlazorChatApp.Application.Services.ChatServices
+@using BlazorChatApp.Application.Services.InvitationServices
+@inject HttpClient HttpClient
+@inject ChatRoomService ChatRoomService;
+@inject InvitationService InvitationService;
+@inject NavigationManager Navigation
+
+<PageTitle>Create a chat room</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Medium" Class="mt-6">
+    <MudPaper Class="pa-4 mt-4 d-flex align-center" Elevation="3">
+        <MudTextField @bind-Value="GroupName" T="string" Label="Group name" Required="true" />
+    </MudPaper>
+
+    <MudPaper Class="pa-4 mt-4 d-flex align-center" Elevation="3">
+        <MudAutocomplete T="string"
+                         Class="flex-1 me-4"
+                         Label="Enter a username to send a group chat request."
+                         @bind-Value="GroupMemberName"
+                         SearchFunc="@Search"
+                         ResetValueOnEmptyText="true"
+                         CoerceText="true"
+                         CoerceValue="true"
+                         SelectValueOnTab="true" />
+
+        <MudButton Variant="Variant.Filled" Color="Color.Default" OnClick="AddMember">
+            Add to the group chat.
+        </MudButton>
+    </MudPaper>
+
+    @if (InvitedPeoples.Count != 0)
+    {
+        <MudPaper Class="pa-4 mt-4 d-flex align-center" Elevation="3">
+            <MudList T="string" Class="flex-1 me-4">
+                @foreach (var user in InvitedPeoples)
+                {
+                    <MudListItem Class="flex-1 me-4" @onclick="() => RemoveMemember(user)">
+                        <div class="d-flex">
+                            <MudAvatar Size="Size.Small" Color="Color.Primary" Class="me-2">
+                                @(user.UserName[0])
+                            </MudAvatar>
+                            <MudText>@user.UserName</MudText>
+                            <MudText HtmlTag="span" Class="ml-auto"><MudIcon Color=@Color.Error Icon="@Icons.Material.Filled.Delete"></MudIcon></MudText>
+                        </div>
+                    </MudListItem>
+                }
+            </MudList>
+        </MudPaper>
+
+
+        <MudButton Class="pa-4 mt-4 d-flex align-center" Variant="Variant.Filled" Color="Color.Primary" OnClick="CreateGroup">
+            Create
+        </MudButton>
+    }
+
+</MudContainer>
+
+
+@code {
+	public string GroupName { get; set; } = string.Empty;
+
+	public string GroupMemberName { get; set; } = string.Empty;
+
+	public List<UserDTO> InvitedPeoples = [];
+
+	public async Task CreateGroup()
+	{
+		var chatGroup = new GroupChatRoomDTO()
+        {
+            Name = GroupName,
+            ChatMembers = InvitedPeoples.Select(x => new ChatMemberDTO()
+            {
+                UserId = x.Id,
+                User = x
+            }
+            ).ToArray()
+        };
+
+		var chatroom = await ChatRoomService.CreateGroupChatRoom(chatGroup);
+
+        Navigation.NavigateTo($"/group-chatroom/{chatroom.Id}");
+	}
+
+    public void RemoveMemember(UserDTO User) => InvitedPeoples.Remove(User);
+
+
+    public async Task AddMember()
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(GroupMemberName))
+                return;
+
+            var user = await HttpClient.GetFromJsonAsync<UserDTO>($"/api/user/{GroupMemberName}");
+
+            if (user == null || InvitedPeoples.Any(x => x.UserName == user!.UserName))
+                return;
+
+            GroupMemberName = string.Empty;
+
+            InvitedPeoples.Add(user!);
+
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+        }
+    }
+
+    private async Task<IEnumerable<string>> Search(string value, CancellationToken token)
+    {
+
+        if (string.IsNullOrEmpty(value))
+            return [];
+
+        var users = await HttpClient.GetFromJsonAsync<UserDTO[]>($"/api/user/search?like={value}");
+
+        return users!.Select(x => x.UserName).ToArray();
+    }
+}
